@@ -956,7 +956,7 @@ elif st.session_state.page == "🏢 Acerca de SAVA":
 
     col1_founder, col2_founder = st.columns([1, 3])
     with col1_founder:
-        st.image("https://github.com/GIUSEPPESAN21/sava-assets/blob/main/logo_sava.png?raw=true", width=200, caption="CEO")
+        st.image("https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true", width=200, caption="CEO")
     with col2_founder:
         st.markdown("#### Joseph Javier Sánchez Acuña")
         st.markdown("**CEO - SAVA SOFTWARE FOR ENGINEERING**")
@@ -982,3 +982,4 @@ elif st.session_state.page == "🏢 Acerca de SAVA":
         st.info("**Jaime Eduardo Aragon Campo**\n\n*Director de Operaciones*")
     with c3_cof:
         st.info("**Joseph Javier Sanchez Acuña**\n\n*Director de Proyecto*")
+
