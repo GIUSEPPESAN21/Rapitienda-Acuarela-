@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 HI-DRIVE: Sistema Avanzado de Gestión de Inventario con IA
-Versión 2.8 - Rebranding Rapi Tienda Acuarela
+Versión 2.8.3 - Rapi Tienda Acuarela (Fix: Delete Dialog Optimized)
 """
 import streamlit as st
 from PIL import Image
@@ -51,15 +51,14 @@ def initialize_services():
         gemini_handler = GeminiUtils()
 
         twilio_client = None
-        # Check for Twilio secrets before initializing the client
         if IS_TWILIO_AVAILABLE and all(k in st.secrets for k in ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN", "TWILIO_WHATSAPP_FROM_NUMBER", "DESTINATION_WHATSAPP_NUMBER"]):
             try:
                 twilio_client = Client(st.secrets["TWILIO_ACCOUNT_SID"], st.secrets["TWILIO_AUTH_TOKEN"])
             except Exception as twilio_e:
-                st.warning(f"No se pudo inicializar Twilio: {twilio_e}. Las notificaciones de WhatsApp estarán desactivadas.")
+                st.warning(f"No se pudo inicializar Twilio: {twilio_e}.")
                 twilio_client = None 
         else:
-             st.warning("Faltan secretos de Twilio. Las notificaciones de WhatsApp estarán desactivadas.")
+             pass
 
         return firebase_handler, gemini_handler, twilio_client, barcode_handler
     except Exception as e:
@@ -68,9 +67,8 @@ def initialize_services():
 
 firebase, gemini, twilio_client, barcode_manager = initialize_services()
 
-# Ensure essential services initialized
 if not all([firebase, gemini, barcode_manager]):
-    st.error("Error al inicializar servicios esenciales (Firebase, Gemini, BarcodeManager). La aplicación no puede continuar.")
+    st.error("Error al inicializar servicios esenciales. La aplicación no puede continuar.")
     st.stop()
 
 # --- Funciones de Estado de Sesión ---
@@ -79,6 +77,7 @@ def init_session_state():
         'page': "🏠 Inicio", 'order_items': [],
         'editing_item_id': None, 'scanned_item_data': None,
         'usb_scan_result': None, 'usb_sale_items': []
+        # 'delete_confirm_id' YA NO ES NECESARIO gracias a st.dialog
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -86,12 +85,28 @@ def init_session_state():
 
 init_session_state()
 
+# --- DIÁLOGOS DE INTERFAZ (OPTIMIZACIÓN UX) ---
+@st.dialog("⚠️ Confirmar Eliminación")
+def show_delete_confirmation(item_id, item_name):
+    st.write(f"¿Estás seguro que deseas eliminar permanentemente el producto **{item_name}**?")
+    st.warning("Esta acción borrará el inventario y el historial asociado. No se puede deshacer.")
+    
+    col1, col2 = st.columns(2)
+    if col1.button("🚨 SÍ, ELIMINAR", type="primary", use_container_width=True):
+        try:
+            with st.spinner("Eliminando..."):
+                firebase.delete_inventory_item(item_id)
+            st.success("¡Producto eliminado correctamente!")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Error al eliminar: {e}")
+            
+    if col2.button("Cancelar", use_container_width=True):
+        st.rerun()
 
 # --- LÓGICA DE NOTIFICACIONES ---
 def send_whatsapp_alert(message):
-    if not twilio_client:
-        st.toast("Twilio no configurado o falló la inicialización. Alerta no enviada.", icon="⚠️")
-        return
+    if not twilio_client: return
     try:
         from_number = st.secrets["TWILIO_WHATSAPP_FROM_NUMBER"]
         to_number = st.secrets["DESTINATION_WHATSAPP_NUMBER"]
@@ -101,14 +116,12 @@ def send_whatsapp_alert(message):
         st.error(f"Error al enviar alerta de Twilio: {e}", icon="🚨")
 
 # --- NAVEGACIÓN PRINCIPAL (SIDEBAR) ---
-# CAMBIO: Logo y Título actualizados para Rapi Tienda Acuarela
 col1, col2, col3 = st.sidebar.columns([1,6,1])
 with col2:
     st.image("https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true", width=150)
 
 st.sidebar.markdown('<h1 style="text-align: center; font-size: 2.0rem; margin-top: -10px;">Rapi Tienda<br>Acuarela</h1>', unsafe_allow_html=True)
 st.sidebar.markdown("<p style='text-align: center; margin-top: -10px;'>Powered by <strong>SAVA</strong></p>", unsafe_allow_html=True)
-
 
 PAGES = {
     "🏠 Inicio": "house",
@@ -129,19 +142,15 @@ for page_name, icon in PAGES.items():
         st.rerun()
 
 st.sidebar.markdown("---")
-# CAMBIO: Footer actualizado
 st.sidebar.markdown("<small>© 2025 SAVA & Rapi Tienda Acuarela. Todos los derechos reservados.</small>", unsafe_allow_html=True)
-
 
 # --- RENDERIZADO DE PÁGINAS ---
 if st.session_state.page != "🏠 Inicio":
     st.markdown(f'<h1 class="main-header">{st.session_state.page}</h1>', unsafe_allow_html=True)
     st.markdown("<hr>", unsafe_allow_html=True)
 
-
 # --- PÁGINAS ---
 if st.session_state.page == "🏠 Inicio":
-    # CAMBIO: Bienvenida actualizada con nueva imagen y textos
     col_img, col_title = st.columns([1, 5])
     with col_img:
         st.image("https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true", width=130)
@@ -267,7 +276,7 @@ elif st.session_state.page == "🛰️ Escáner USB":
                 barcode = result['barcode']
                 st.warning(f"⚠️ El código '{barcode}' no existe. Por favor, regístralo.")
 
-                with st.form("create_from_usb_scan_form"):
+                with st.form("create_from_usb_scan_form", clear_on_submit=True):
                     st.markdown(f"**Código de Barras:** `{barcode}`")
                     name = st.text_input("Nombre del Producto")
                     quantity = st.number_input("Cantidad Inicial", min_value=1, step=1, value=1)
@@ -441,14 +450,21 @@ elif st.session_state.page == "📦 Inventario":
                     for item in filtered_items:
                         item_id = item.get('id', 'N/A')
                         with st.container(border=True):
-                            c1, c2, c3, c4 = st.columns([4, 2, 2, 1])
+                            # --- COLUMNAS AJUSTADAS ---
+                            c1, c2, c3, c4, c5 = st.columns([4, 2, 2, 1, 1])
                             c1.markdown(f"**{item.get('name', 'N/A')}**")
                             c1.caption(f"ID: {item_id}")
                             c2.metric("Stock", item.get('quantity', 0))
                             c3.metric("Precio Venta", f"${item.get('sale_price', 0):,.2f}")
+                            
                             if c4.button("✏️", key=f"edit_{item_id}", help="Editar este artículo"):
                                 st.session_state.editing_item_id = item_id
-                                st.rerun() 
+                                st.rerun()
+                            
+                            # --- BOTÓN DE ELIMINAR OPTIMIZADO CON DIÁLOGO ---
+                            if c5.button("🗑️", key=f"del_{item_id}", help="Eliminar permanentemente"):
+                                show_delete_confirmation(item_id, item.get('name', 'Producto'))
+
             except Exception as view_e:
                  st.error(f"Error al cargar el inventario: {view_e}")
 
@@ -459,7 +475,7 @@ elif st.session_state.page == "📦 Inventario":
                 supplier_map = {s.get('name', f"ID: {s.get('id')}"): s.get('id') for s in suppliers}
                 supplier_names = [""] + list(supplier_map.keys())
 
-                with st.form("add_item_form_new"):
+                with st.form("add_item_form_new", clear_on_submit=True):
                     custom_id = st.text_input("ID Personalizado (SKU)", help="Debe ser único")
                     name = st.text_input("Nombre del Artículo")
                     quantity = st.number_input("Cantidad Inicial", min_value=0, step=1, value=1)
@@ -486,7 +502,7 @@ elif st.session_state.page == "📦 Inventario":
                                 }
                                 try:
                                     firebase.save_inventory_item(data, custom_id, is_new=True)
-                                    st.success(f"Artículo '{name}' guardado con ID: {custom_id}.")
+                                    st.success(f"Artículo '{name}' guardado con ID: {custom_id}. El formulario se limpiará automáticamente.")
                                 except Exception as add_e:
                                     st.error(f"Error al guardar el nuevo artículo: {add_e}")
                         else:
@@ -982,4 +998,3 @@ elif st.session_state.page == "🏢 Acerca de SAVA":
         st.info("**Jaime Eduardo Aragon Campo**\n\n*Director de Operaciones*")
     with c3_cof:
         st.info("**Joseph Javier Sanchez Acuña**\n\n*Director de Proyecto*")
-
