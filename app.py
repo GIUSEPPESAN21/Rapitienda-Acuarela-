@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 HI-DRIVE: Sistema Avanzado de Gestión de Inventario con IA
-Versión 2.8.6 - Rapi Tienda Acuarela (Fix: Callback de Guardado Seguro)
+Versión 2.8.7 - Rapi Tienda Acuarela (Fix: Sentinel Flag for Safe State Reset)
 """
 import streamlit as st
 from PIL import Image
@@ -78,10 +78,12 @@ def init_session_state():
         'editing_item_id': None, 'scanned_item_data': None,
         'usb_scan_result': None, 'usb_sale_items': [],
         # Variables para el flujo seguro de 2 pasos
-        'add_sku_input': "", # Almacena el código escaneado
+        'add_sku_input': "", 
         'new_item_name': "", 'new_item_qty': 1, 
         'new_item_purchase': 0.0, 'new_item_sale': 0.0, 'new_item_alert': 0,
-        'new_item_supplier': "" # Nueva key para el selectbox
+        'new_item_supplier': "",
+        # Flag Centinela para limpieza segura
+        'should_clear_inventory_form': False
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -119,13 +121,16 @@ def send_whatsapp_alert(message):
     except Exception as e:
         st.error(f"Error al enviar alerta de Twilio: {e}", icon="🚨")
 
-# --- FUNCIONES CALLBACK (Lógica segura para evitar errores de widget) ---
+# --- FUNCIONES CALLBACK & HELPERS ---
+def set_clear_form_flag():
+    """Callback simple para activar la bandera de limpieza."""
+    st.session_state.should_clear_inventory_form = True
+
 def save_new_item_callback(supplier_map, current_sku):
     """
-    Guarda el nuevo ítem y limpia el formulario. 
-    Se ejecuta ANTES de que la UI se renderice de nuevo, evitando el error de modificación de widgets.
+    Intenta guardar el ítem y activa la bandera de limpieza si tiene éxito.
     """
-    # Recoger valores directamente del session_state
+    # Leer valores de session_state
     name = st.session_state.get('new_item_name')
     quantity = st.session_state.get('new_item_qty')
     purchase_price = st.session_state.get('new_item_purchase')
@@ -153,18 +158,8 @@ def save_new_item_callback(supplier_map, current_sku):
     try:
         firebase.save_inventory_item(data, current_sku, is_new=True)
         st.toast(f"✅ ¡Producto '{name}' guardado correctamente!", icon="✅")
-        
-        # --- LIMPIEZA SEGURA ---
-        # Al modificar session_state aquí (dentro del callback), el cambio se aplica 
-        # para la *próxima* renderización, evitando el conflicto "widget instantiated".
-        st.session_state.add_sku_input = "" 
-        st.session_state.new_item_name = ""
-        st.session_state.new_item_qty = 1
-        st.session_state.new_item_purchase = 0.0
-        st.session_state.new_item_sale = 0.0
-        st.session_state.new_item_alert = 0
-        st.session_state.new_item_supplier = ""
-        
+        # Activar bandera para que el formulario se limpie en la PRÓXIMA renderización
+        st.session_state.should_clear_inventory_form = True
     except Exception as add_e:
         st.toast(f"❌ Error al guardar: {add_e}", icon="❌")
 
@@ -193,8 +188,9 @@ for page_name, icon in PAGES.items():
         st.session_state.editing_item_id = None
         st.session_state.scanned_item_data = None
         st.session_state.usb_scan_result = None
-        # Limpiar variables de escaneo al cambiar de página
+        # Limpiar al cambiar de página
         st.session_state.add_sku_input = ""
+        st.session_state.should_clear_inventory_form = False
         st.rerun()
 
 st.sidebar.markdown("---")
@@ -526,6 +522,18 @@ elif st.session_state.page == "📦 Inventario":
         with tab2:
             st.subheader("Añadir Nuevo Artículo al Inventario")
             
+            # --- MANEJO DE BANDERA CENTINELA (FIX ERROR MODIFICACIÓN) ---
+            # Si la bandera está activa, limpiamos el estado ANTES de renderizar los widgets
+            if st.session_state.get('should_clear_inventory_form'):
+                st.session_state.add_sku_input = "" 
+                st.session_state.new_item_name = ""
+                st.session_state.new_item_qty = 1
+                st.session_state.new_item_purchase = 0.0
+                st.session_state.new_item_sale = 0.0
+                st.session_state.new_item_alert = 0
+                st.session_state.new_item_supplier = "" # Key del selectbox
+                st.session_state.should_clear_inventory_form = False
+
             # --- PASO 1: ESCANEO DE IDENTIFICACIÓN ---
             st.markdown("##### 1️⃣ Paso 1: Escanea o Escribe el Código (SKU)")
             st.info("Usa tu lector de código de barras aquí. Si el producto no existe, podrás crearlo en el paso siguiente.")
@@ -545,9 +553,9 @@ elif st.session_state.page == "📦 Inventario":
                             st.session_state.editing_item_id = sku_candidate
                             st.session_state.page = "📦 Inventario" # Recargar para entrar en modo edición
                             st.rerun()
-                        if col_ex_2.button("🔄 Limpiar y Escanear Otro", width='stretch'):
-                            st.session_state.add_sku_input = ""
-                            st.rerun()
+                        # FIX: Botón de limpiar usa callback para evitar modificar widget ya instanciado
+                        if col_ex_2.button("🔄 Limpiar y Escanear Otro", width='stretch', on_click=set_clear_form_flag):
+                            pass # La limpieza ocurre al recargar gracias al flag
                     else:
                         st.success(f"✨ ID Disponible: **{sku_candidate}**. Completa los detalles abajo:")
                         st.markdown("---")
@@ -559,7 +567,7 @@ elif st.session_state.page == "📦 Inventario":
                             supplier_map = {s.get('name', f"ID: {s.get('id')}"): s.get('id') for s in suppliers}
                             supplier_names = [""] + list(supplier_map.keys())
 
-                            # Formulario sin clear_on_submit, limpieza manual en callback
+                            # Formulario sin clear_on_submit, limpieza controlada por bandera
                             with st.form("create_new_item_step2", clear_on_submit=False):
                                 name = st.text_input("Nombre del Artículo", key="new_item_name")
                                 quantity = st.number_input("Cantidad Inicial", min_value=0, step=1, key="new_item_qty")
@@ -570,7 +578,7 @@ elif st.session_state.page == "📦 Inventario":
                                 # AÑADIDA KEY al selectbox para leerlo en el callback
                                 selected_supplier_name = st.selectbox("Proveedor", supplier_names, key="new_item_supplier")
 
-                                # Callback vinculado al clic
+                                # Callback vinculado al clic para guardado seguro
                                 st.form_submit_button(
                                     "💾 Guardar Producto", 
                                     type="primary", 
