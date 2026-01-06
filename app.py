@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 HI-DRIVE: Sistema Avanzado de Gestión de Inventario con IA
-Versión 2.8.4 - Rapi Tienda Acuarela (Fix: Smart Form Reset)
+Versión 2.8.5 - Rapi Tienda Acuarela (Fix: Flujo de Escaneo Seguro 2 Pasos)
 """
 import streamlit as st
 from PIL import Image
@@ -77,10 +77,10 @@ def init_session_state():
         'page': "🏠 Inicio", 'order_items': [],
         'editing_item_id': None, 'scanned_item_data': None,
         'usb_scan_result': None, 'usb_sale_items': [],
-        # Variables para el formulario de añadir manual (limpieza controlada)
-        'new_item_id': "", 'new_item_name': "", 
-        'new_item_qty': 1, 'new_item_purchase': 0.0, 
-        'new_item_sale': 0.0, 'new_item_alert': 0
+        # Variables para el flujo seguro de 2 pasos
+        'add_sku_input': "", # Almacena el código escaneado
+        'new_item_name': "", 'new_item_qty': 1, 
+        'new_item_purchase': 0.0, 'new_item_sale': 0.0, 'new_item_alert': 0
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -142,6 +142,8 @@ for page_name, icon in PAGES.items():
         st.session_state.editing_item_id = None
         st.session_state.scanned_item_data = None
         st.session_state.usb_scan_result = None
+        # Limpiar variables de escaneo al cambiar de página
+        st.session_state.add_sku_input = ""
         st.rerun()
 
 st.sidebar.markdown("---")
@@ -279,7 +281,8 @@ elif st.session_state.page == "🛰️ Escáner USB":
                 barcode = result['barcode']
                 st.warning(f"⚠️ El código '{barcode}' no existe. Por favor, regístralo.")
 
-                with st.form("create_from_usb_scan_form", clear_on_submit=True):
+                # Se cambió a clear_on_submit=False para evitar borrado prematuro
+                with st.form("create_from_usb_scan_form", clear_on_submit=False):
                     st.markdown(f"**Código de Barras:** `{barcode}`")
                     name = st.text_input("Nombre del Producto")
                     quantity = st.number_input("Cantidad Inicial", min_value=1, step=1, value=1)
@@ -298,7 +301,7 @@ elif st.session_state.page == "🛰️ Escáner USB":
                             try:
                                 firebase.save_inventory_item(data, barcode, is_new=True, details="Creado vía Escáner USB.")
                                 st.success(f"¡Producto '{name}' guardado!")
-                                st.session_state.usb_scan_result = None
+                                st.session_state.usb_scan_result = None # Limpia resultado
                                 st.rerun()
                             except Exception as create_e:
                                 st.error(f"Error al guardar: {create_e}")
@@ -471,58 +474,89 @@ elif st.session_state.page == "📦 Inventario":
 
         with tab2:
             st.subheader("Añadir Nuevo Artículo al Inventario")
-            try:
-                suppliers = firebase.get_all_suppliers()
-                supplier_map = {s.get('name', f"ID: {s.get('id')}"): s.get('id') for s in suppliers}
-                supplier_names = [""] + list(supplier_map.keys())
+            
+            # --- FUNCIÓN DE RESETEO (Limpieza manual) ---
+            def reset_add_flow():
+                st.session_state.add_sku_input = "" 
+                st.session_state.new_item_name = ""
+                st.session_state.new_item_qty = 1
+                st.session_state.new_item_purchase = 0.0
+                st.session_state.new_item_sale = 0.0
+                st.session_state.new_item_alert = 0
 
-                # --- CORRECCIÓN JOSH SAO: Limpieza Manual ---
-                # clear_on_submit=False para evitar borrado prematuro.
-                # Usamos st.session_state keys para persistencia y limpieza manual.
-                with st.form("add_item_form_new", clear_on_submit=False):
-                    custom_id = st.text_input("ID Personalizado (SKU)", key="new_item_id", help="Debe ser único")
-                    name = st.text_input("Nombre del Artículo", key="new_item_name")
-                    quantity = st.number_input("Cantidad Inicial", min_value=0, step=1, key="new_item_qty")
-                    purchase_price = st.number_input("Costo de Compra ($)", min_value=0.0, format="%.2f", key="new_item_purchase")
-                    sale_price = st.number_input("Precio de Venta ($)", min_value=0.0, format="%.2f", key="new_item_sale")
-                    min_stock_alert = st.number_input("Umbral de Alerta", min_value=0, step=1, key="new_item_alert")
-                    selected_supplier_name = st.selectbox("Proveedor", supplier_names)
+            # --- PASO 1: ESCANEO DE IDENTIFICACIÓN ---
+            st.markdown("##### 1️⃣ Paso 1: Escanea o Escribe el Código (SKU)")
+            st.info("Usa tu lector de código de barras aquí. Si el producto no existe, podrás crearlo en el paso siguiente.")
+            
+            # Usamos un text_input aislado para que el 'Enter' del escáner solo valide, no guarde datos vacíos.
+            sku_candidate = st.text_input("Código del Producto", key="add_sku_input", placeholder="Escanea aquí...")
 
-                    if st.form_submit_button("Guardar Nuevo Artículo", type="primary", width='stretch'):
-                        if custom_id and name:
-                            if firebase.get_inventory_item_details(custom_id):
-                                st.error(f"El ID '{custom_id}' ya existe. Por favor, usa uno diferente.")
-                            else:
-                                supplier_id = supplier_map.get(selected_supplier_name)
-                                data = {
-                                    "name": name,
-                                    "quantity": int(quantity),
-                                    "purchase_price": float(purchase_price),
-                                    "sale_price": float(sale_price),
-                                    "min_stock_alert": int(min_stock_alert),
-                                    "supplier_id": supplier_id,
-                                    "supplier_name": selected_supplier_name if supplier_id else "",
-                                    "updated_at": datetime.now(timezone.utc).isoformat()
-                                }
-                                try:
-                                    firebase.save_inventory_item(data, custom_id, is_new=True)
-                                    st.success(f"Artículo '{name}' guardado con ID: {custom_id}.")
-                                    
-                                    # --- LIMPIEZA MANUAL AL GUARDAR CON ÉXITO ---
-                                    st.session_state.new_item_id = ""
-                                    st.session_state.new_item_name = ""
-                                    st.session_state.new_item_qty = 1
-                                    st.session_state.new_item_purchase = 0.0
-                                    st.session_state.new_item_sale = 0.0
-                                    st.session_state.new_item_alert = 0
-                                    st.rerun() # Recarga para mostrar campos limpios
-                                except Exception as add_e:
-                                    st.error(f"Error al guardar el nuevo artículo: {add_e}")
-                        else:
-                            st.warning("El ID personalizado y el nombre del artículo son obligatorios.")
-                            # NOTA: Aquí NO borramos ni hacemos rerun, manteniendo los datos visibles.
-            except Exception as sup_e:
-                 st.error(f"Error al cargar proveedores: {sup_e}")
+            if sku_candidate:
+                # Verificar si existe en la base de datos
+                try:
+                    existing_item = firebase.get_inventory_item_details(sku_candidate)
+                    
+                    if existing_item:
+                        st.warning(f"⚠️ El producto con ID **{sku_candidate}** ya existe: '{existing_item.get('name')}'.")
+                        col_ex_1, col_ex_2 = st.columns(2)
+                        if col_ex_1.button("✏️ Editar este producto existente", width='stretch'):
+                            st.session_state.editing_item_id = sku_candidate
+                            st.session_state.page = "📦 Inventario" # Recargar para entrar en modo edición
+                            st.rerun()
+                        if col_ex_2.button("🔄 Limpiar y Escanear Otro", width='stretch'):
+                            reset_add_flow()
+                            st.rerun()
+                    else:
+                        st.success(f"✨ ID Disponible: **{sku_candidate}**. Completa los detalles abajo:")
+                        st.markdown("---")
+                        
+                        # --- PASO 2: FORMULARIO DE CREACIÓN ---
+                        st.markdown("##### 2️⃣ Paso 2: Detalles del Nuevo Producto")
+                        try:
+                            suppliers = firebase.get_all_suppliers()
+                            supplier_map = {s.get('name', f"ID: {s.get('id')}"): s.get('id') for s in suppliers}
+                            supplier_names = [""] + list(supplier_map.keys())
+
+                            # Formulario sin clear_on_submit, limpiamos manualmente al éxito
+                            with st.form("create_new_item_step2", clear_on_submit=False):
+                                name = st.text_input("Nombre del Artículo", key="new_item_name")
+                                quantity = st.number_input("Cantidad Inicial", min_value=0, step=1, key="new_item_qty")
+                                purchase_price = st.number_input("Costo de Compra ($)", min_value=0.0, format="%.2f", key="new_item_purchase")
+                                sale_price = st.number_input("Precio de Venta ($)", min_value=0.0, format="%.2f", key="new_item_sale")
+                                min_stock_alert = st.number_input("Umbral de Alerta", min_value=0, step=1, key="new_item_alert")
+                                selected_supplier_name = st.selectbox("Proveedor", supplier_names)
+
+                                submitted = st.form_submit_button("💾 Guardar Producto", type="primary", width='stretch')
+
+                                if submitted:
+                                    if name:
+                                        supplier_id = supplier_map.get(selected_supplier_name)
+                                        data = {
+                                            "name": name,
+                                            "quantity": int(quantity),
+                                            "purchase_price": float(purchase_price),
+                                            "sale_price": float(sale_price),
+                                            "min_stock_alert": int(min_stock_alert),
+                                            "supplier_id": supplier_id,
+                                            "supplier_name": selected_supplier_name if supplier_id else "",
+                                            "updated_at": datetime.now(timezone.utc).isoformat()
+                                        }
+                                        try:
+                                            firebase.save_inventory_item(data, sku_candidate, is_new=True)
+                                            st.toast(f"¡Producto '{name}' guardado correctamente!", icon="✅")
+                                            
+                                            # --- LIMPIEZA TOTAL Y REINICIO ---
+                                            reset_add_flow()
+                                            st.rerun() # Esto limpiará el campo de escaneo superior
+                                        except Exception as add_e:
+                                            st.error(f"Error al guardar: {add_e}")
+                                    else:
+                                        st.warning("El nombre del artículo es obligatorio.")
+                        except Exception as sup_e:
+                            st.error(f"Error cargando proveedores: {sup_e}")
+
+                except Exception as lookup_e:
+                    st.error(f"Error verificando ID: {lookup_e}")
 
 
 elif st.session_state.page == "👥 Proveedores":
