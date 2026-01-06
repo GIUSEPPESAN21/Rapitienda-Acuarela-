@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 HI-DRIVE: Sistema Avanzado de Gestión de Inventario con IA
-Versión 2.8.5 - Rapi Tienda Acuarela (Fix: Flujo de Escaneo Seguro 2 Pasos)
+Versión 2.8.6 - Rapi Tienda Acuarela (Fix: Callback de Guardado Seguro)
 """
 import streamlit as st
 from PIL import Image
@@ -80,7 +80,8 @@ def init_session_state():
         # Variables para el flujo seguro de 2 pasos
         'add_sku_input': "", # Almacena el código escaneado
         'new_item_name': "", 'new_item_qty': 1, 
-        'new_item_purchase': 0.0, 'new_item_sale': 0.0, 'new_item_alert': 0
+        'new_item_purchase': 0.0, 'new_item_sale': 0.0, 'new_item_alert': 0,
+        'new_item_supplier': "" # Nueva key para el selectbox
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -117,6 +118,56 @@ def send_whatsapp_alert(message):
         st.toast("¡Alerta de WhatsApp enviada!", icon="📲")
     except Exception as e:
         st.error(f"Error al enviar alerta de Twilio: {e}", icon="🚨")
+
+# --- FUNCIONES CALLBACK (Lógica segura para evitar errores de widget) ---
+def save_new_item_callback(supplier_map, current_sku):
+    """
+    Guarda el nuevo ítem y limpia el formulario. 
+    Se ejecuta ANTES de que la UI se renderice de nuevo, evitando el error de modificación de widgets.
+    """
+    # Recoger valores directamente del session_state
+    name = st.session_state.get('new_item_name')
+    quantity = st.session_state.get('new_item_qty')
+    purchase_price = st.session_state.get('new_item_purchase')
+    sale_price = st.session_state.get('new_item_sale')
+    min_stock_alert = st.session_state.get('new_item_alert')
+    selected_supplier_name = st.session_state.get('new_item_supplier')
+
+    if not name:
+        st.toast("⚠️ El nombre del artículo es obligatorio.", icon="⚠️")
+        return
+
+    supplier_id = supplier_map.get(selected_supplier_name)
+    
+    data = {
+        "name": name,
+        "quantity": int(quantity),
+        "purchase_price": float(purchase_price),
+        "sale_price": float(sale_price),
+        "min_stock_alert": int(min_stock_alert),
+        "supplier_id": supplier_id,
+        "supplier_name": selected_supplier_name if supplier_id else "",
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+
+    try:
+        firebase.save_inventory_item(data, current_sku, is_new=True)
+        st.toast(f"✅ ¡Producto '{name}' guardado correctamente!", icon="✅")
+        
+        # --- LIMPIEZA SEGURA ---
+        # Al modificar session_state aquí (dentro del callback), el cambio se aplica 
+        # para la *próxima* renderización, evitando el conflicto "widget instantiated".
+        st.session_state.add_sku_input = "" 
+        st.session_state.new_item_name = ""
+        st.session_state.new_item_qty = 1
+        st.session_state.new_item_purchase = 0.0
+        st.session_state.new_item_sale = 0.0
+        st.session_state.new_item_alert = 0
+        st.session_state.new_item_supplier = ""
+        
+    except Exception as add_e:
+        st.toast(f"❌ Error al guardar: {add_e}", icon="❌")
+
 
 # --- NAVEGACIÓN PRINCIPAL (SIDEBAR) ---
 col1, col2, col3 = st.sidebar.columns([1,6,1])
@@ -475,20 +526,11 @@ elif st.session_state.page == "📦 Inventario":
         with tab2:
             st.subheader("Añadir Nuevo Artículo al Inventario")
             
-            # --- FUNCIÓN DE RESETEO (Limpieza manual) ---
-            def reset_add_flow():
-                st.session_state.add_sku_input = "" 
-                st.session_state.new_item_name = ""
-                st.session_state.new_item_qty = 1
-                st.session_state.new_item_purchase = 0.0
-                st.session_state.new_item_sale = 0.0
-                st.session_state.new_item_alert = 0
-
             # --- PASO 1: ESCANEO DE IDENTIFICACIÓN ---
             st.markdown("##### 1️⃣ Paso 1: Escanea o Escribe el Código (SKU)")
             st.info("Usa tu lector de código de barras aquí. Si el producto no existe, podrás crearlo en el paso siguiente.")
             
-            # Usamos un text_input aislado para que el 'Enter' del escáner solo valide, no guarde datos vacíos.
+            # Usamos un text_input aislado.
             sku_candidate = st.text_input("Código del Producto", key="add_sku_input", placeholder="Escanea aquí...")
 
             if sku_candidate:
@@ -504,7 +546,7 @@ elif st.session_state.page == "📦 Inventario":
                             st.session_state.page = "📦 Inventario" # Recargar para entrar en modo edición
                             st.rerun()
                         if col_ex_2.button("🔄 Limpiar y Escanear Otro", width='stretch'):
-                            reset_add_flow()
+                            st.session_state.add_sku_input = ""
                             st.rerun()
                     else:
                         st.success(f"✨ ID Disponible: **{sku_candidate}**. Completa los detalles abajo:")
@@ -517,41 +559,26 @@ elif st.session_state.page == "📦 Inventario":
                             supplier_map = {s.get('name', f"ID: {s.get('id')}"): s.get('id') for s in suppliers}
                             supplier_names = [""] + list(supplier_map.keys())
 
-                            # Formulario sin clear_on_submit, limpiamos manualmente al éxito
+                            # Formulario sin clear_on_submit, limpieza manual en callback
                             with st.form("create_new_item_step2", clear_on_submit=False):
                                 name = st.text_input("Nombre del Artículo", key="new_item_name")
                                 quantity = st.number_input("Cantidad Inicial", min_value=0, step=1, key="new_item_qty")
                                 purchase_price = st.number_input("Costo de Compra ($)", min_value=0.0, format="%.2f", key="new_item_purchase")
                                 sale_price = st.number_input("Precio de Venta ($)", min_value=0.0, format="%.2f", key="new_item_sale")
                                 min_stock_alert = st.number_input("Umbral de Alerta", min_value=0, step=1, key="new_item_alert")
-                                selected_supplier_name = st.selectbox("Proveedor", supplier_names)
+                                
+                                # AÑADIDA KEY al selectbox para leerlo en el callback
+                                selected_supplier_name = st.selectbox("Proveedor", supplier_names, key="new_item_supplier")
 
-                                submitted = st.form_submit_button("💾 Guardar Producto", type="primary", width='stretch')
+                                # Callback vinculado al clic
+                                st.form_submit_button(
+                                    "💾 Guardar Producto", 
+                                    type="primary", 
+                                    width='stretch',
+                                    on_click=save_new_item_callback,
+                                    args=(supplier_map, sku_candidate)
+                                )
 
-                                if submitted:
-                                    if name:
-                                        supplier_id = supplier_map.get(selected_supplier_name)
-                                        data = {
-                                            "name": name,
-                                            "quantity": int(quantity),
-                                            "purchase_price": float(purchase_price),
-                                            "sale_price": float(sale_price),
-                                            "min_stock_alert": int(min_stock_alert),
-                                            "supplier_id": supplier_id,
-                                            "supplier_name": selected_supplier_name if supplier_id else "",
-                                            "updated_at": datetime.now(timezone.utc).isoformat()
-                                        }
-                                        try:
-                                            firebase.save_inventory_item(data, sku_candidate, is_new=True)
-                                            st.toast(f"¡Producto '{name}' guardado correctamente!", icon="✅")
-                                            
-                                            # --- LIMPIEZA TOTAL Y REINICIO ---
-                                            reset_add_flow()
-                                            st.rerun() # Esto limpiará el campo de escaneo superior
-                                        except Exception as add_e:
-                                            st.error(f"Error al guardar: {add_e}")
-                                    else:
-                                        st.warning("El nombre del artículo es obligatorio.")
                         except Exception as sup_e:
                             st.error(f"Error cargando proveedores: {sup_e}")
 
