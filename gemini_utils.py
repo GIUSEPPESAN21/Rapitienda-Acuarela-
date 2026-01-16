@@ -60,9 +60,26 @@ class GeminiUtils:
 
         total_revenue = sum(o.get('price', 0) for o in orders if isinstance(o.get('price'), (int, float)))
         total_orders = len(orders)
+        
+        # --- NUEVA LÓGICA: Desglose Efectivo vs Fiado ---
+        cash_revenue = 0.0
+        credit_revenue = 0.0 # Fiado
+        fiado_details = []
 
         item_sales = {}
         for order in orders:
+            price = order.get('price', 0)
+            if not isinstance(price, (int, float)): price = 0
+            
+            # Clasificación por método de pago
+            payment_method = order.get('payment_method', 'efectivo')
+            if payment_method == 'fiado':
+                credit_revenue += price
+                customer = order.get('customer_name', 'Desconocido')
+                fiado_details.append(f"- {customer}: ${price:,.2f}")
+            else:
+                cash_revenue += price
+
             for item in order.get('ingredients', []):
                 item_name = item.get('name', 'N/A')
                 quantity = item.get('quantity', 0)
@@ -72,14 +89,20 @@ class GeminiUtils:
         top_selling_items = sorted(item_sales.items(), key=lambda x: x[1], reverse=True)
 
         prompt = f"""
-        **Actúa como un analista de negocios experto para una tienda.**
+        **Actúa como un analista de negocios experto para una tienda (Rapi Tienda Acuarela).**
 
         **Fecha del Reporte:** {datetime.now(timezone.utc).strftime('%d de %B de %Y')}
 
-        **Datos de Ventas del Día:**
-        * **Ingresos Totales:** ${total_revenue:,.2f}
-        * **Número de Pedidos:** {total_orders}
-        * **Artículos Vendidos (Nombre: Cantidad):**
+        **Resumen Financiero del Día:**
+        * **Ventas Totales (Bruto):** ${total_revenue:,.2f}
+        * **Dinero en Caja (Efectivo):** ${cash_revenue:,.2f}
+        * **Cuentas por Cobrar (Fiado):** ${credit_revenue:,.2f}
+        * **Número de Transacciones:** {total_orders}
+
+        **Detalle de Cuentas por Cobrar (Fiado):**
+        {chr(10).join(fiado_details) if fiado_details else "    * No hubo ventas fiadas hoy."}
+
+        **Artículos Más Vendidos (Nombre: Cantidad):**
         """
         for name, qty in top_selling_items:
             prompt += f"    * {name}: {qty}\n"
@@ -87,9 +110,9 @@ class GeminiUtils:
         prompt += """
         **Tu Tarea:**
         Basado en los datos de ventas de hoy, escribe un reporte conciso y accionable en formato Markdown. El reporte debe incluir:
-        1.  Un **Resumen Ejecutivo** de una o dos frases.
+        1.  Un **Resumen Ejecutivo** (Menciona si el nivel de ventas fiadas es saludable o preocupante).
         2.  Una sección de **Observaciones Clave** con 2-3 puntos importantes.
-        3.  Una sección de **Recomendaciones Estratégicas** con 2-3 acciones claras.
+        3.  Una sección de **Recomendaciones Estratégicas** (Incluye recordatorios de cobro si hay fiados).
         4.  Al final del todo, incluye la siguiente firma:
             
             ---
@@ -161,4 +184,3 @@ class GeminiUtils:
         except Exception as e:
             logger.error(f"Error crítico durante el análisis de imagen con Gemini: {e}")
             return json.dumps({"error": f"No se pudo contactar al servicio de IA para imagen: {str(e)}"})
-
