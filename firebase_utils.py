@@ -43,8 +43,12 @@ def _complete_order_atomic(transaction, db, order_id):
     return True, f"Pedido '{order_data.get('title')}' completado.", low_stock_alerts
 
 @firestore.transactional
-def _process_direct_sale_atomic(transaction, db, items_sold, sale_id):
+def _process_direct_sale_atomic(transaction, db, items_sold, sale_id, payment_data=None):
+    # --- MODIFICACIÓN: Soporte para registro de venta y fiado ---
     items_to_update = []
+    total_sale_amount = 0.0
+    enriched_ingredients = []
+
     for sold_item in items_sold:
         item_ref = db.collection('inventory').document(sold_item['id'])
         item_snapshot = item_ref.get(transaction=transaction)
@@ -54,8 +58,22 @@ def _process_direct_sale_atomic(transaction, db, items_sold, sale_id):
         current_quantity = item_data.get('quantity', 0)
         if current_quantity < sold_item['quantity']:
             raise ValueError(f"Stock insuficiente para '{sold_item.get('name')}'.")
+        
+        # Calcular precios para el registro de la orden
+        sale_price = item_data.get('sale_price', 0.0)
+        item_total = sale_price * sold_item['quantity']
+        total_sale_amount += item_total
+        
         new_quantity = current_quantity - sold_item['quantity']
         items_to_update.append({'ref': item_ref, 'new_quantity': new_quantity, 'item_data': item_data, 'sold_quantity': sold_item['quantity']})
+        
+        enriched_ingredients.append({
+            'id': sold_item['id'],
+            'name': item_data.get('name'),
+            'quantity': sold_item['quantity'],
+            'sale_price': sale_price
+        })
+
     low_stock_alerts = []
     for item_update in items_to_update:
         transaction.update(item_update['ref'], {'quantity': item_update['new_quantity']})
@@ -65,6 +83,25 @@ def _process_direct_sale_atomic(transaction, db, items_sold, sale_id):
         min_stock_alert = item_update['item_data'].get('min_stock_alert')
         if min_stock_alert and 0 < item_update['new_quantity'] <= min_stock_alert:
             low_stock_alerts.append(f"'{item_update['item_data'].get('name')}' ha alcanzado el umbral de stock mínimo ({item_update['new_quantity']}/{min_stock_alert}).")
+    
+    # --- NUEVO: Crear registro en 'orders' para reporte diario ---
+    if payment_data is None:
+        payment_data = {'method': 'efectivo', 'customer': 'Cliente General'}
+
+    order_ref = db.collection('orders').document(sale_id)
+    order_data = {
+        'title': f"Venta Directa {sale_id.split('-')[-1]}",
+        'price': total_sale_amount,
+        'ingredients': enriched_ingredients,
+        'status': 'completed',
+        'timestamp': datetime.now(timezone.utc),
+        'completed_at': datetime.now(timezone.utc),
+        'payment_method': payment_data.get('method', 'efectivo'),
+        'customer_name': payment_data.get('customer', 'Cliente General'),
+        'is_direct_sale': True
+    }
+    transaction.set(order_ref, order_data)
+    
     return True, f"Venta '{sale_id}' procesada y stock actualizado.", low_stock_alerts
 
 def firestore_retry(func):
@@ -229,10 +266,11 @@ class FirebaseManager:
             logger.error(f"Transaction failed for order {order_id}: {e}")
             return False, f"Transaction error: {str(e)}", []
             
-    def process_direct_sale(self, items_sold, sale_id):
+    def process_direct_sale(self, items_sold, sale_id, payment_data=None):
         try:
             transaction = self.db.transaction()
-            return _process_direct_sale_atomic(transaction, self.db, items_sold, sale_id)
+            # --- MODIFICACIÓN: Pasamos payment_data ---
+            return _process_direct_sale_atomic(transaction, self.db, items_sold, sale_id, payment_data)
         except Exception as e:
             logger.error(f"Transaction failed for direct sale {sale_id}: {e}")
             return False, f"Transaction error: {str(e)}", []
