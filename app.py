@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 HI-DRIVE: Sistema Avanzado de Gestión de Inventario con IA
-Versión 2.8.7 - Rapi Tienda Acuarela (Fix: Sentinel Flag for Safe State Reset)
+Versión 2.8.8 - Rapi Tienda Acuarela (Fix: Image URL Syntax Error)
 """
 import streamlit as st
 from PIL import Image
@@ -25,6 +25,7 @@ except ImportError as e:
 
 
 # --- CONFIGURACIÓN DE PÁGINA Y ESTILOS ---
+# CORRECCIÓN: URL limpia sin formato markdown
 st.set_page_config(
     page_title="Rapi Tienda Acuarela | Sistema SAVA",
     page_icon="https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true",
@@ -167,6 +168,7 @@ def save_new_item_callback(supplier_map, current_sku):
 # --- NAVEGACIÓN PRINCIPAL (SIDEBAR) ---
 col1, col2, col3 = st.sidebar.columns([1,6,1])
 with col2:
+    # CORRECCIÓN: URL limpia sin formato markdown
     st.image("https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true", width=150)
 
 st.sidebar.markdown('<h1 style="text-align: center; font-size: 2.0rem; margin-top: -10px;">Rapi Tienda<br>Acuarela</h1>', unsafe_allow_html=True)
@@ -177,7 +179,7 @@ PAGES = {
     "🛰️ Escáner USB": "upc-scan",
     "📦 Inventario": "box-seam",
     "👥 Proveedores": "people",
-    "🛒 Pedidos": "cart4",
+    "🛒 Ventas": "cart4",
     "📊 Analítica": "graph-up-arrow",
     "📈 Reporte Diario": "clipboard-data",
     "🏢 Acerca de SAVA": "building"
@@ -205,6 +207,7 @@ if st.session_state.page != "🏠 Inicio":
 if st.session_state.page == "🏠 Inicio":
     col_img, col_title = st.columns([1, 5])
     with col_img:
+        # CORRECCIÓN: URL limpia sin formato markdown
         st.image("https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true", width=130)
     with col_title:
         st.markdown('<h1 class="main-header" style="text-align: left; margin-top: 20px;">Bienvenido a Rapi Tienda Acuarela</h1>', unsafe_allow_html=True)
@@ -230,7 +233,7 @@ if st.session_state.page == "🏠 Inicio":
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("📦 Artículos Únicos", len(items))
         c2.metric("💰 Valor del Inventario", f"${total_inventory_value:,.2f}")
-        c3.metric("⏳ Pedidos en Proceso", processing_orders_count)
+        c3.metric("⏳ Ventas en Proceso", processing_orders_count)
         c4.metric("👥 Proveedores", len(suppliers))
     except Exception as e:
         st.error(f"No se pudieron cargar las estadísticas: {e}")
@@ -242,8 +245,8 @@ if st.session_state.page == "🏠 Inicio":
         st.subheader("Acciones Rápidas")
         if st.button("🛰️ Usar Escáner USB", width='stretch'):
              st.session_state.page = "🛰️ Escáner USB"; st.rerun()
-        if st.button("📝 Crear Nuevo Pedido", width='stretch'):
-            st.session_state.page = "🛒 Pedidos"; st.rerun()
+        if st.button("📝 Crear Nueva Venta", width='stretch'):
+            st.session_state.page = "🛒 Ventas"; st.rerun()
         if st.button("➕ Añadir Artículo", width='stretch'):
             st.session_state.page = "📦 Inventario"; st.rerun()
 
@@ -396,21 +399,43 @@ elif st.session_state.page == "🛰️ Escáner USB":
                 st.dataframe(pd.DataFrame(df_items), use_container_width=True, hide_index=True)
                 st.markdown(f"### Total Venta: `${total_sale_price:,.2f}`")
 
+                # --- NUEVA SECCIÓN: FIADO ---
+                st.markdown("#### Método de Pago")
+                is_fiado = st.checkbox("¿Marcar como FIADO (Crédito)?", key="usb_fiado_check")
+                customer_name = "Cliente General"
+                
+                if is_fiado:
+                    customer_name = st.text_input("Nombre del Cliente (Deudor)", placeholder="Ej: Juan Pérez")
+                    if not customer_name:
+                        st.caption("⚠️ Debes ingresar un nombre para fiar.")
+
                 c1, c2 = st.columns(2)
-                if c1.button("✅ Finalizar y Descontar Stock", type="primary", width='stretch'):
-                    sale_id = f"VentaDirecta-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}" 
-                    try:
-                        success, msg, alerts = firebase.process_direct_sale(st.session_state.usb_sale_items, sale_id)
-                        if success:
-                            st.success(msg)
-                            send_whatsapp_alert(f"💸 Venta Rápida Procesada: {sale_id} por un total de ${total_sale_price:,.2f}")
-                            for alert in alerts: send_whatsapp_alert(f"📉 ALERTA DE STOCK: {alert}")
-                            st.session_state.usb_sale_items = []
-                            st.rerun()
-                        else:
-                            st.error(msg)
-                    except Exception as sale_e:
-                        st.error(f"Error al procesar la venta: {sale_e}")
+                btn_label = "✅ Finalizar Venta" if not is_fiado else "📝 Registrar Fiado"
+
+                if c1.button(btn_label, type="primary", width='stretch'):
+                    if is_fiado and not customer_name:
+                         st.error("Error: Falta el nombre del cliente para fiar.")
+                    else:
+                        sale_id = f"VentaDirecta-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}" 
+                        
+                        payment_info = {
+                            'method': 'fiado' if is_fiado else 'efectivo',
+                            'customer': customer_name
+                        }
+
+                        try:
+                            # Se pasa payment_info a la función
+                            success, msg, alerts = firebase.process_direct_sale(st.session_state.usb_sale_items, sale_id, payment_info)
+                            if success:
+                                st.success(msg)
+                                send_whatsapp_alert(f"💸 Venta Rápida Procesada: {sale_id} por un total de ${total_sale_price:,.2f}")
+                                for alert in alerts: send_whatsapp_alert(f"📉 ALERTA DE STOCK: {alert}")
+                                st.session_state.usb_sale_items = []
+                                st.rerun()
+                            else:
+                                st.error(msg)
+                        except Exception as sale_e:
+                            st.error(f"Error al procesar la venta: {sale_e}")
 
 
                 if c2.button("❌ Cancelar Venta", width='stretch'):
@@ -634,7 +659,7 @@ elif st.session_state.page == "👥 Proveedores":
              st.error(f"Error al cargar la lista de proveedores: {list_sup_e}")
 
 
-elif st.session_state.page == "🛒 Pedidos":
+elif st.session_state.page == "🛒 Ventas":
     try:
         items_from_db = firebase.get_all_inventory_items()
     except Exception as e:
@@ -643,9 +668,9 @@ elif st.session_state.page == "🛒 Pedidos":
 
     col1, col2 = st.columns([2, 3])
     with col1:
-        st.subheader("Añadir Artículos al Pedido")
+        st.subheader("Añadir Artículos a la Venta")
 
-        add_method = st.radio("Método para añadir:", ("Selección Manual", "Escanear para Pedido"), horizontal=True, key="add_order_method")
+        add_method = st.radio("Método para añadir:", ("Selección Manual", "Escanear para Venta"), horizontal=True, key="add_order_method")
 
         if add_method == "Selección Manual":
             if not items_from_db:
@@ -660,7 +685,7 @@ elif st.session_state.page == "🛒 Pedidos":
                     item_id = item_to_add.get('id', 'N/A')
                     qty_to_add = st.number_input(f"Cantidad de '{selected_name}'", min_value=1, value=1, step=1, key=f"sel_qty_{item_id}")
 
-                    if st.button(f"Añadir {qty_to_add} al Pedido", width='stretch'):
+                    if st.button(f"Añadir {qty_to_add} a la Venta", width='stretch'):
                         updated_order_items, status_msg = barcode_manager.add_item_to_order_list(item_to_add, st.session_state.order_items, qty_to_add)
                         st.session_state.order_items = updated_order_items
                         if status_msg['status'] == 'success':
@@ -669,7 +694,7 @@ elif st.session_state.page == "🛒 Pedidos":
                             st.warning(status_msg['message']) 
                         st.rerun() 
 
-        elif add_method == "Escanear para Pedido":
+        elif add_method == "Escanear para Venta":
              with st.form("order_scan_form", clear_on_submit=True):
                 barcode_input = st.text_input("Escanear Código de Producto", key="order_barcode_scan_input")
                 submitted = st.form_submit_button("Buscar y Añadir", width='stretch')
@@ -694,9 +719,9 @@ elif st.session_state.page == "🛒 Pedidos":
 
 
     with col2:
-        st.subheader("Detalle del Pedido Actual")
+        st.subheader("Detalle de la Venta Actual")
         if not st.session_state.order_items:
-            st.info("Añade artículos para comenzar un pedido.")
+            st.info("Añade artículos para comenzar una venta.")
         else:
             order_df_data = []
             for item in st.session_state.order_items:
@@ -745,7 +770,7 @@ elif st.session_state.page == "🛒 Pedidos":
                         total_price += subtotal
                         updated_items_from_editor.append(original_item)
                     else:
-                        st.toast(f"'{row['Producto']}' eliminado del pedido (cantidad 0).", icon="🗑️")
+                        st.toast(f"'{row['Producto']}' eliminado de la venta (cantidad 0).", icon="🗑️")
 
 
             if len(updated_items_from_editor) != len(st.session_state.order_items) or any(
@@ -756,21 +781,31 @@ elif st.session_state.page == "🛒 Pedidos":
                  st.rerun()
 
 
-            st.metric("Precio Total del Pedido", f"${total_price:,.2f}")
+            st.metric("Precio Total de la Venta", f"${total_price:,.2f}")
 
             try:
                 order_count = firebase.get_order_count()
-                default_title = f"Pedido #{order_count + 1}"
+                default_title = f"Venta #{order_count + 1}"
             except Exception as count_e:
-                st.warning(f"No se pudo obtener el contador de pedidos: {count_e}")
-                default_title = "Nuevo Pedido"
+                st.warning(f"No se pudo obtener el contador de ventas: {count_e}")
+                default_title = "Nueva Venta"
+
+            # --- NUEVA SECCIÓN: FIADO EN VENTA MANUAL ---
+            st.write("---")
+            is_credit = st.checkbox("Venta a Crédito (Fiado)", key="man_fiado")
+            client = "Cliente General"
+            if is_credit:
+                client = st.text_input("Nombre del Cliente (Deudor)", key="man_client", placeholder="Ej: Juan Pérez")
 
             with st.form("order_form"):
-                title = st.text_input("Nombre del Pedido (opcional)", placeholder=default_title)
+                title = st.text_input("Nombre de la Venta (opcional)", placeholder=default_title)
                 final_title = title if title else default_title
-                if st.form_submit_button("Crear Pedido", type="primary", width='stretch'):
+                
+                if st.form_submit_button("Crear Venta", type="primary", width='stretch'):
                     if not st.session_state.order_items:
-                        st.warning("No hay artículos en el pedido.")
+                        st.warning("No hay artículos en la venta.")
+                    elif is_credit and not client:
+                         st.error("Error: Falta el nombre del cliente para fiar.")
                     else:
                         ingredients_for_db = []
                         valid_order = True
@@ -793,24 +828,26 @@ elif st.session_state.page == "🛒 Pedidos":
                                 'price': total_price,
                                 'ingredients': ingredients_for_db,
                                 'status': 'processing',
-                                'timestamp': datetime.now(timezone.utc)
+                                'timestamp': datetime.now(timezone.utc),
+                                'payment_method': 'fiado' if is_credit else 'efectivo',
+                                'customer_name': client
                             }
                             try:
                                 firebase.create_order(order_data)
-                                st.success(f"Pedido '{final_title}' creado con éxito.")
-                                send_whatsapp_alert(f"🧾 Nuevo Pedido: {final_title} por ${total_price:,.2f}")
+                                st.success(f"Venta '{final_title}' creada con éxito.")
+                                send_whatsapp_alert(f"🧾 Nueva Venta: {final_title} por ${total_price:,.2f}")
                                 st.session_state.order_items = []
                                 st.rerun() 
                             except Exception as create_order_e:
-                                st.error(f"Error al crear el pedido: {create_order_e}")
+                                st.error(f"Error al crear la venta: {create_order_e}")
 
 
     st.markdown("---")
-    st.subheader("⏳ Pedidos en Proceso")
+    st.subheader("⏳ Ventas en Proceso")
     try:
         processing_orders = firebase.get_orders('processing')
         if not processing_orders:
-            st.info("No hay pedidos en proceso.")
+            st.info("No hay ventas en proceso.")
         else:
             for order in processing_orders:
                 order_id = order.get('id', 'N/A')
@@ -819,29 +856,29 @@ elif st.session_state.page == "🛒 Pedidos":
                     for item in order.get('ingredients', []):
                         st.write(f"- {item.get('name', 'N/A')} (x{item.get('quantity', 0)})")
                     c1, c2 = st.columns(2)
-                    if c1.button("✅ Completar Pedido", key=f"comp_{order_id}", type="primary", width='stretch'):
+                    if c1.button("✅ Completar Venta", key=f"comp_{order_id}", type="primary", width='stretch'):
                         try:
                             success, msg, alerts = firebase.complete_order(order_id)
                             if success:
                                 st.success(msg)
-                                send_whatsapp_alert(f"✅ Pedido Completado: {order.get('title', 'N/A')}")
+                                send_whatsapp_alert(f"✅ Venta Completada: {order.get('title', 'N/A')}")
                                 for alert in alerts: send_whatsapp_alert(f"📉 ALERTA DE STOCK: {alert}")
                                 st.rerun() 
                             else:
                                 st.error(msg)
                         except Exception as complete_e:
-                             st.error(f"Error al completar pedido: {complete_e}")
+                             st.error(f"Error al completar venta: {complete_e}")
 
-                    if c2.button("❌ Cancelar Pedido", key=f"canc_{order_id}", width='stretch'):
+                    if c2.button("❌ Cancelar Venta", key=f"canc_{order_id}", width='stretch'):
                         try:
                              firebase.cancel_order(order_id)
-                             st.toast(f"Pedido '{order.get('title', 'N/A')}' cancelado.")
+                             st.toast(f"Venta '{order.get('title', 'N/A')}' cancelada.")
                              st.rerun() 
                         except Exception as cancel_e:
-                             st.error(f"Error al cancelar pedido: {cancel_e}")
+                             st.error(f"Error al cancelar venta: {cancel_e}")
 
     except Exception as proc_ord_e:
-        st.error(f"Error al cargar pedidos en proceso: {proc_ord_e}")
+        st.error(f"Error al cargar ventas en proceso: {proc_ord_e}")
 
 
 elif st.session_state.page == "📊 Analítica":
@@ -853,7 +890,7 @@ elif st.session_state.page == "📊 Analítica":
         completed_orders, all_inventory_items = [], [] 
 
     if not completed_orders:
-        st.info("No hay pedidos completados para generar analíticas.")
+        st.info("No hay ventas completadas para generar analíticas.")
     else:
         tab1, tab2, tab3 = st.tabs(["💰 Rendimiento Financiero", "🔄 Rotación de Inventario", "📈 Predicción de Demanda"])
 
@@ -878,8 +915,8 @@ elif st.session_state.page == "📊 Analítica":
             kpi_cols[0].metric("Ingresos Totales", f"${total_revenue:,.2f}")
             kpi_cols[1].metric("Beneficio Bruto", f"${gross_profit:,.2f}")
             kpi_cols[2].metric("Margen de Beneficio", f"{profit_margin:.2f}%")
-            kpi_cols[3].metric("Pedidos Completados", num_orders)
-            kpi_cols[4].metric("Valor Promedio/Pedido", f"${avg_order_value:,.2f}")
+            kpi_cols[3].metric("Ventas Completadas", num_orders)
+            kpi_cols[4].metric("Valor Promedio/Venta", f"${avg_order_value:,.2f}")
             st.markdown("---")
 
             st.subheader("Tendencia de Ingresos y Beneficios Diarios")
