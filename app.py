@@ -72,6 +72,15 @@ if not all([firebase, gemini, barcode_manager]):
     st.error("Error al inicializar servicios esenciales. La aplicación no puede continuar.")
     st.stop()
 
+# --- NUEVO: FUNCIÓN CON CACHÉ PARA EL INVENTARIO ---
+@st.cache_data(ttl=300) # El caché dura 300 segundos (5 minutos)
+def get_cached_inventory():
+    try:
+        return firebase.get_all_inventory_items()
+    except Exception as e:
+        st.error(f"Error cargando inventario: {e}")
+        return []
+
 # --- Funciones de Estado de Sesión ---
 def init_session_state():
     defaults = {
@@ -101,6 +110,7 @@ def show_delete_confirmation(item_id, item_name):
         try:
             with st.spinner("Eliminando..."):
                 firebase.delete_inventory_item(item_id)
+                get_cached_inventory.clear() # <- Limpieza de caché
             st.success("¡Producto eliminado correctamente!")
             st.rerun()
         except Exception as e:
@@ -151,6 +161,7 @@ def save_new_item_callback(supplier_map, current_sku):
 
     try:
         firebase.save_inventory_item(data, current_sku, is_new=True)
+        get_cached_inventory.clear() # <- Limpieza de caché
         st.toast(f"✅ ¡Producto '{name}' guardado correctamente!", icon="✅")
         st.session_state.should_clear_inventory_form = True
     except Exception as add_e:
@@ -213,7 +224,7 @@ if st.session_state.page == "🏠 Inicio":
     orders = []
     suppliers = []
     try:
-        items = firebase.get_all_inventory_items()
+        items = get_cached_inventory() # <- Uso de caché
         orders = firebase.get_orders(status=None) 
         suppliers = firebase.get_all_suppliers()
         total_inventory_value = sum(item.get('quantity', 0) * item.get('purchase_price', 0) for item in items if isinstance(item.get('quantity'), (int, float)) and isinstance(item.get('purchase_price'), (int, float)))
@@ -308,6 +319,7 @@ elif st.session_state.page == "🛰️ Escáner USB":
                         })
                         try:
                             firebase.save_inventory_item(updated_data, item['id'], is_new=False, details="Actualización vía Escáner USB.")
+                            get_cached_inventory.clear() # <- Limpieza de caché
                             st.success(f"¡'{item.get('name', 'N/A')}' actualizado con éxito!")
                             st.session_state.usb_scan_result = None
                             st.rerun()
@@ -336,6 +348,7 @@ elif st.session_state.page == "🛰️ Escáner USB":
                              }
                             try:
                                 firebase.save_inventory_item(data, barcode, is_new=True, details="Creado vía Escáner USB.")
+                                get_cached_inventory.clear() # <- Limpieza de caché
                                 st.success(f"¡Producto '{name}' guardado!")
                                 st.session_state.usb_scan_result = None 
                                 st.rerun()
@@ -422,6 +435,7 @@ elif st.session_state.page == "🛰️ Escáner USB":
                         try:
                             success, msg, alerts = firebase.process_direct_sale(st.session_state.usb_sale_items, sale_id, payment_info)
                             if success:
+                                get_cached_inventory.clear() # <- Limpieza de caché
                                 st.success(msg)
                                 send_whatsapp_alert(f"💸 Venta Rápida Procesada: {sale_id} por un total de ${total_sale_price:,.2f}")
                                 for alert in alerts: send_whatsapp_alert(f"📉 ALERTA DE STOCK: {alert}")
@@ -482,6 +496,7 @@ elif st.session_state.page == "📦 Inventario":
                             }
                             try:
                                 firebase.save_inventory_item(data, item_id_to_edit, is_new=False, details="Edición manual de datos.")
+                                get_cached_inventory.clear() # <- Limpieza de caché
                                 st.success(f"Artículo '{name}' actualizado.")
                                 st.session_state.editing_item_id = None
                                 st.rerun()
@@ -504,7 +519,7 @@ elif st.session_state.page == "📦 Inventario":
         with tab1:
             search_query = st.text_input(" Buscar por Nombre o Código/ID", placeholder="Ej: Laptop, 750100100200")
             try:
-                items = firebase.get_all_inventory_items()
+                items = get_cached_inventory() # <- Uso de caché
 
                 if search_query:
                     search_query_lower = search_query.lower()
@@ -645,7 +660,7 @@ elif st.session_state.page == "👥 Proveedores":
 
 elif st.session_state.page == "🛒 Ventas":
     try:
-        items_from_db = firebase.get_all_inventory_items()
+        items_from_db = get_cached_inventory() # <- Uso de caché
     except Exception as e:
         st.error(f"Error al cargar artículos de inventario: {e}")
         items_from_db = [] 
@@ -854,6 +869,7 @@ elif st.session_state.page == "🛒 Ventas":
                         try:
                             success, msg, alerts = firebase.complete_order(order_id)
                             if success:
+                                get_cached_inventory.clear() # <- Limpieza de caché
                                 st.success(msg)
                                 send_whatsapp_alert(f"✅ Venta Completada: {order.get('title', 'N/A')}")
                                 for alert in alerts: send_whatsapp_alert(f"📉 ALERTA DE STOCK: {alert}")
@@ -878,7 +894,7 @@ elif st.session_state.page == "🛒 Ventas":
 elif st.session_state.page == "📊 Analítica":
     try:
         completed_orders = firebase.get_orders('completed')
-        all_inventory_items = firebase.get_all_inventory_items()
+        all_inventory_items = get_cached_inventory() # <- Uso de caché
         suppliers_list = firebase.get_all_suppliers() 
     except Exception as e:
         st.error(f"No se pudieron cargar los datos para el análisis: {e}")
